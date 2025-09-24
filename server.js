@@ -10,7 +10,9 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
 
 // Configuración de Twilio WhatsApp
-const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+const client = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN ? 
+  twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN) : 
+  null;
 
 // Configuración de Google Sheets
 const auth = new google.auth.GoogleAuth({
@@ -136,6 +138,10 @@ function formatCart(cart) {
 
 // Función para enviar mensajes
 async function sendMessage(to, body) {
+  if (!client) {
+    console.error('Twilio client not initialized - check credentials');
+    return;
+  }
   try {
     await client.messages.create({
       body: body,
