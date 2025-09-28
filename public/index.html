@@ -504,23 +504,26 @@
             }).format(amount);
         }
 
-        function updateStats() {
-            const today = new Date().toDateString();
-            const todayOrders = orders.filter(order => 
-                new Date(order.date).toDateString() === today
-            );
+       function updateStats() {
+    const today = new Date().toDateString();
+    
+    // Solo contar pedidos activos para las estadísticas
+    const todayActiveOrders = orders.filter(order => 
+        new Date(order.date).toDateString() === today &&
+        !['CANCELADO', 'FINALIZADO'].includes(order.status)
+    );
 
-            const totalRevenue = todayOrders.reduce((sum, order) => sum + order.total, 0);
-            const pendingOrders = orders.filter(order => 
-                ['NUEVO', 'PREPARANDO', 'PAGO_RECIBIDO', 'LISTO', 'EN_DELIVERY'].includes(order.status)
-            ).length;
-            const avgOrder = todayOrders.length > 0 ? totalRevenue / todayOrders.length : 0;
+    const totalRevenue = todayActiveOrders.reduce((sum, order) => sum + order.total, 0);
+    const pendingOrders = orders.filter(order => 
+        ['NUEVO', 'PREPARANDO', 'PAGO_RECIBIDO', 'LISTO', 'EN_DELIVERY'].includes(order.status)
+    ).length;
+    const avgOrder = todayActiveOrders.length > 0 ? totalRevenue / todayActiveOrders.length : 0;
 
-            document.getElementById('totalOrders').textContent = todayOrders.length;
-            document.getElementById('totalRevenue').textContent = formatPrice(totalRevenue);
-            document.getElementById('pendingOrders').textContent = pendingOrders;
-            document.getElementById('avgOrder').textContent = formatPrice(avgOrder);
-        }
+    document.getElementById('totalOrders').textContent = todayActiveOrders.length;
+    document.getElementById('totalRevenue').textContent = formatPrice(totalRevenue);
+    document.getElementById('pendingOrders').textContent = pendingOrders;
+    document.getElementById('avgOrder').textContent = formatPrice(avgOrder);
+}
 
         function renderOrders() {
             const ordersGrid = document.getElementById('ordersGrid');
