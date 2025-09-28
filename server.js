@@ -18,7 +18,7 @@ const client = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN ?
 const auth = new google.auth.GoogleAuth({
   credentials: {
     client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-private_key: process.env.GOOGLE_PRIVATE_KEY ? process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n') : '',
+    private_key: process.env.GOOGLE_PRIVATE_KEY ? process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n') : '',
   },
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
@@ -33,7 +33,11 @@ const userStates = new Map();
 // Estados del bot
 const STATES = {
   MAIN_MENU: 'main_menu',
+  BROWSING_PRODUCTS: 'browsing_products',
+  CART_REVIEW: 'cart_review',
   DELIVERY_INFO: 'delivery_info',
+  PAYMENT_METHOD: 'payment_method',
+  PAYMENT_CONFIRMATION: 'payment_confirmation',
   CONFIRMING_ORDER: 'confirming_order'
 };
 
@@ -74,12 +78,14 @@ async function saveOrder(orderData) {
       orderData.total,
       orderData.deliveryType,
       orderData.address || '',
+      orderData.paymentMethod || 'Efectivo',
+      orderData.paymentStatus || 'Pendiente',
       'NUEVO'
     ]];
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Pedidos!A:H',
+      range: 'Pedidos!A:K',
       valueInputOption: 'USER_ENTERED',
       resource: { values }
     });
@@ -88,15 +94,54 @@ async function saveOrder(orderData) {
   }
 }
 
+// Función para actualizar estado del pedido
+async function updateOrderStatus(phone, newStatus) {
+  try {
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Pedidos!A:K',
+    });
+    
+    const rows = response.data.values;
+    if (!rows || rows.length <= 1) return false;
+    
+    // Buscar el pedido más reciente del usuario
+    for (let i = rows.length - 1; i >= 1; i--) {
+      if (rows[i][1] === phone) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: SPREADSHEET_ID,
+          range: `Pedidos!K${i + 1}`,
+          valueInputOption: 'USER_ENTERED',
+          resource: { values: [[newStatus]] }
+        });
+        return true;
+      }
+    }
+    return false;
+  } catch (error) {
+    console.error('Error updating order status:', error);
+    return false;
+  }
+}
+
+// Función para formatear precios argentinos
+function formatPrice(price) {
+  return new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    minimumFractionDigits: 0
+  }).format(price);
+}
+
 // Función para formatear el menú
-function formatMenu(menu) {
+function formatMenuWithButtons(menu) {
   const categories = [...new Set(menu.map(item => item.category))];
   let message = "🍽️ *MENÚ DISPONIBLE*\n\n";
   
   categories.forEach(category => {
     message += `📋 *${category}*\n`;
     menu.filter(item => item.category === category).forEach(item => {
-      message += `${item.id}. ${item.name} - $${item.price}\n`;
+      message += `${item.id}. ${item.name} - ${formatPrice(item.price)}\n`;
       if (item.description) {
         message += `   _${item.description}_\n`;
       }
@@ -104,34 +149,37 @@ function formatMenu(menu) {
     message += "\n";
   });
   
-  message += "Para ordenar, envía el número del producto.\n";
-  message += "Para ver tu carrito: *carrito*\n";
-  message += "Para finalizar pedido: *finalizar*";
-  
   return message;
 }
 
-// Función para formatear el carrito
-function formatCart(cart) {
-  if (!cart || cart.length === 0) {
-    return "🛒 Tu carrito está vacío.\nEnvía *menu* para ver nuestros productos.";
-  }
-  
+// Función para formatear el carrito mejorada - SIEMPRE muestra contenido
+function formatCart(cart, showOptions = true) {
   let message = "🛒 *TU CARRITO*\n\n";
   let total = 0;
   
-  cart.forEach(item => {
-    const subtotal = item.price * item.quantity;
-    total += subtotal;
-    message += `${item.name}\n`;
-    message += `Cantidad: ${item.quantity} x $${item.price} = $${subtotal.toFixed(2)}\n\n`;
-  });
+  if (!cart || cart.length === 0) {
+    message += "Carrito vacío\n\n";
+  } else {
+    cart.forEach((item, index) => {
+      const subtotal = item.price * item.quantity;
+      total += subtotal;
+      message += `${index + 1}. ${item.name}\n`;
+      message += `   Cantidad: ${item.quantity} x ${formatPrice(item.price)} = ${formatPrice(subtotal)}\n\n`;
+    });
+  }
   
-  message += `*TOTAL: $${total.toFixed(2)}*\n\n`;
-  message += "Opciones:\n";
-  message += "• *menu* - Ver menú\n";
-  message += "• *limpiar* - Vaciar carrito\n";
-  message += "• *finalizar* - Completar pedido";
+  message += `💰 *TOTAL: ${formatPrice(total)}*\n\n`;
+  
+  if (showOptions) {
+    message += "*Opciones disponibles:*\n";
+    message += "• Enviá un número para agregar productos\n";
+    message += "• Enviá varios números separados por comas (ej: 1,2,3)\n";
+    if (cart.length > 0) {
+      message += "• *finalizar* - Completar pedido\n";
+      message += "• *limpiar* - Vaciar carrito\n";
+    }
+    message += "• *menu* - Ver menú completo";
+  }
   
   return message;
 }
@@ -142,6 +190,7 @@ async function sendMessage(to, body) {
     console.error('Twilio client not initialized - check credentials');
     return;
   }
+  
   try {
     await client.messages.create({
       body: body,
@@ -154,8 +203,9 @@ async function sendMessage(to, body) {
 }
 
 // Función para procesar pedido completo
-async function processOrder(phone, customerName, cart, deliveryType, address = '') {
+async function processOrder(phone, customerName, cart, deliveryType, address = '', paymentMethod = 'efectivo') {
   const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const orderId = Date.now().toString();
   
   const orderData = {
     customerPhone: phone,
@@ -163,7 +213,10 @@ async function processOrder(phone, customerName, cart, deliveryType, address = '
     items: cart,
     total: total,
     deliveryType: deliveryType,
-    address: address
+    address: address,
+    paymentMethod: paymentMethod,
+    paymentStatus: paymentMethod === 'efectivo' ? 'Confirmado' : 'Pendiente',
+    orderId: orderId
   };
   
   await saveOrder(orderData);
@@ -174,13 +227,14 @@ async function processOrder(phone, customerName, cart, deliveryType, address = '
   
   // Mensaje de confirmación
   let confirmMessage = "✅ *PEDIDO CONFIRMADO*\n\n";
-  confirmMessage += `📝 *Resumen:*\n`;
+  confirmMessage += `📝 *Pedido #${orderId.slice(-6)}*\n\n`;
   
   cart.forEach(item => {
-    confirmMessage += `• ${item.name} x${item.quantity} - $${(item.price * item.quantity).toFixed(2)}\n`;
+    confirmMessage += `• ${item.name} x${item.quantity} - ${formatPrice(item.price * item.quantity)}\n`;
   });
   
-  confirmMessage += `\n💰 *Total: $${total.toFixed(2)}*\n\n`;
+  confirmMessage += `\n💰 *Total: ${formatPrice(total)}*\n`;
+  confirmMessage += `💳 *Pago: ${paymentMethod === 'efectivo' ? 'Efectivo' : 'MercadoPago'}*\n\n`;
   
   if (deliveryType === 'delivery') {
     confirmMessage += `🚚 *Delivery a:* ${address}\n`;
@@ -190,15 +244,31 @@ async function processOrder(phone, customerName, cart, deliveryType, address = '
     confirmMessage += `⏱️ *Estará listo en:* 20-30 minutos\n\n`;
   }
   
-  confirmMessage += "¡Gracias por tu pedido! 😊";
+  if (paymentMethod === 'mercadopago') {
+    confirmMessage += `💳 *Para completar el pago:*\n`;
+    confirmMessage += `💰 Alias: TUCOMIDA.MP\n`;
+    confirmMessage += `💵 Importe: ${formatPrice(total)}\n`;
+    confirmMessage += `📝 Concepto: Pedido #${orderId.slice(-6)}\n\n`;
+    confirmMessage += `📸 *Después del pago, enviá una foto del comprobante.*\n\n`;
+  }
+  
+  confirmMessage += "¡Gracias por elegirnos! 😊\n";
+  confirmMessage += "Te avisamos cuando esté listo para retirar/entregar.";
   
   await sendMessage(phone, confirmMessage);
+  
+  return orderId;
 }
 
-// Webhook principal de WhatsApp
+// Función para notificar al cliente
+async function notifyCustomer(phone, message) {
+  await sendMessage(phone, message);
+}
+
+// Webhook principal de WhatsApp mejorado
 app.post('/webhook', async (req, res) => {
-  const { Body, From, ProfileName } = req.body;
-  const message = Body.toLowerCase().trim();
+  const { Body, From, ProfileName, MediaUrl0, MediaContentType0 } = req.body;
+  const message = Body ? Body.toLowerCase().trim() : '';
   const phone = From;
   const customerName = ProfileName || 'Cliente';
   
@@ -209,90 +279,180 @@ app.post('/webhook', async (req, res) => {
   let cart = userCarts.get(phone) || [];
   
   try {
+    // Manejar imágenes (comprobantes de pago)
+    if (MediaUrl0 && MediaContentType0 && MediaContentType0.startsWith('image/')) {
+      if (userState === STATES.PAYMENT_CONFIRMATION) {
+        await updateOrderStatus(phone, 'PAGO_RECIBIDO');
+        await sendMessage(phone, 
+          "✅ *Comprobante recibido correctamente.*\n\n" +
+          "📋 Verificaremos tu pago y te confirmaremos en breve.\n" +
+          "🍽️ Una vez confirmado, comenzamos a preparar tu pedido.\n\n" +
+          "¡Gracias por tu paciencia!"
+        );
+        userStates.set(phone, STATES.MAIN_MENU);
+        return res.sendStatus(200);
+      }
+    }
+    
     if (message === 'menu' || message === 'menú') {
       const menu = await getMenu();
-      const menuText = formatMenu(menu);
-      await sendMessage(phone, menuText);
-      userStates.set(phone, STATES.MAIN_MENU);
+      const menuText = formatMenuWithButtons(menu);
+      let fullMessage = menuText + "\n\n";
+      
+      // SIEMPRE mostrar estado del carrito
+      fullMessage += formatCart(cart, true);
+      
+      await sendMessage(phone, fullMessage);
+      userStates.set(phone, STATES.BROWSING_PRODUCTS);
       
     } else if (message === 'carrito') {
-      const cartText = formatCart(cart);
+      const cartText = formatCart(cart, true);
       await sendMessage(phone, cartText);
       
     } else if (message === 'limpiar') {
       userCarts.set(phone, []);
-      await sendMessage(phone, "🗑️ Carrito vaciado. Envía *menu* para comenzar.");
+      await sendMessage(phone, "🗑️ Carrito vaciado.\n\n" + formatCart([], true));
       userStates.set(phone, STATES.MAIN_MENU);
       
     } else if (message === 'finalizar') {
       if (cart.length === 0) {
-        await sendMessage(phone, "Tu carrito está vacío. Envía *menu* para agregar productos.");
+        await sendMessage(phone, "Tu carrito está vacío. Enviá *menu* para agregar productos.");
         return res.sendStatus(200);
       }
       
       let confirmMessage = "🏠 *TIPO DE ENTREGA*\n\n";
-      confirmMessage += "1. 🚚 Delivery\n";
-      confirmMessage += "2. 🏪 Retiro en local\n\n";
-      confirmMessage += "Responde con el número de tu elección.";
+      confirmMessage += formatCart(cart, false) + "\n\n";
+      confirmMessage += "*Seleccioná una opción:*\n";
+      confirmMessage += "1️⃣ 🚚 Delivery\n";
+      confirmMessage += "2️⃣ 🏪 Retiro en local\n\n";
+      confirmMessage += "Enviá *1* para delivery o *2* para retiro.";
       
       await sendMessage(phone, confirmMessage);
       userStates.set(phone, STATES.DELIVERY_INFO);
       
     } else if (userState === STATES.DELIVERY_INFO) {
       if (message === '1') {
-        await sendMessage(phone, "📍 Por favor envía tu dirección completa para el delivery:");
-        userStates.set(phone, STATES.CONFIRMING_ORDER);
+        await sendMessage(phone, "📍 Por favor enviá tu dirección completa para el delivery:");
+        userStates.set(phone, STATES.PAYMENT_METHOD);
+        userCarts.set(phone + '_delivery', 'delivery');
         
       } else if (message === '2') {
-        await processOrder(phone, customerName, cart, 'pickup');
+        userCarts.set(phone + '_delivery', 'pickup');
+        
+        let paymentMessage = "💳 *MÉTODO DE PAGO*\n\n";
+        paymentMessage += formatCart(cart, false) + "\n\n";
+        paymentMessage += "*Seleccioná cómo vas a pagar:*\n";
+        paymentMessage += "1️⃣ 💵 Efectivo (en el local)\n";
+        paymentMessage += "2️⃣ 💳 MercadoPago (transferencia)\n\n";
+        paymentMessage += "Enviá *1* para efectivo o *2* para MercadoPago.";
+        
+        await sendMessage(phone, paymentMessage);
+        userStates.set(phone, STATES.PAYMENT_METHOD);
         
       } else {
-        await sendMessage(phone, "Por favor selecciona una opción válida:\n1. Delivery\n2. Retiro en local");
+        await sendMessage(phone, "Por favor seleccioná una opción válida:\n1️⃣ Delivery\n2️⃣ Retiro en local");
       }
       
-    } else if (userState === STATES.CONFIRMING_ORDER) {
-      await processOrder(phone, customerName, cart, 'delivery', message);
+    } else if (userState === STATES.PAYMENT_METHOD) {
+      const deliveryType = userCarts.get(phone + '_delivery') || 'pickup';
+      const address = message;
       
-    } else if (/^\d+$/.test(message)) {
-      // Usuario seleccionó un producto por número
+      if (deliveryType === 'delivery' && !userCarts.get(phone + '_address')) {
+        // Guardar dirección y pedir método de pago
+        userCarts.set(phone + '_address', address);
+        
+        let paymentMessage = "💳 *MÉTODO DE PAGO*\n\n";
+        paymentMessage += formatCart(cart, false) + "\n\n";
+        paymentMessage += `🚚 *Delivery a:* ${address}\n\n`;
+        paymentMessage += "*Seleccioná cómo vas a pagar:*\n";
+        paymentMessage += "1️⃣ 💵 Efectivo (al recibir)\n";
+        paymentMessage += "2️⃣ 💳 MercadoPago (transferencia)\n\n";
+        paymentMessage += "Enviá *1* para efectivo o *2* para MercadoPago.";
+        
+        await sendMessage(phone, paymentMessage);
+        return res.sendStatus(200);
+      }
+      
+      if (message === '1') {
+        // Pago en efectivo
+        const finalAddress = userCarts.get(phone + '_address') || '';
+        await processOrder(phone, customerName, cart, deliveryType, finalAddress, 'efectivo');
+        
+        // Limpiar datos temporales
+        userCarts.delete(phone + '_delivery');
+        userCarts.delete(phone + '_address');
+        
+      } else if (message === '2') {
+        // Pago con MercadoPago
+        const finalAddress = userCarts.get(phone + '_address') || '';
+        const orderId = await processOrder(phone, customerName, cart, deliveryType, finalAddress, 'mercadopago');
+        
+        userStates.set(phone, STATES.PAYMENT_CONFIRMATION);
+        
+        // Limpiar datos temporales
+        userCarts.delete(phone + '_delivery');
+        userCarts.delete(phone + '_address');
+        
+      } else {
+        await sendMessage(phone, "Por favor seleccioná una opción válida:\n1️⃣ Efectivo\n2️⃣ MercadoPago");
+      }
+      
+    } else if (/^[\d,\s]+$/.test(message)) {
+      // Usuario seleccionó productos (múltiples números: 1,2,3 o 1 2 3)
       const menu = await getMenu();
-      const productId = parseInt(message);
-      const product = menu.find(item => parseInt(item.id) === productId);
+      const productIds = message.split(/[,\s]+/).map(id => parseInt(id.trim())).filter(id => !isNaN(id));
       
-      if (product) {
-        // Agregar al carrito
-        const existingItem = cart.find(item => item.id === product.id);
+      let addedProducts = [];
+      let notFoundProducts = [];
+      
+      productIds.forEach(productId => {
+        const product = menu.find(item => parseInt(item.id) === productId);
         
-        if (existingItem) {
-          existingItem.quantity += 1;
+        if (product) {
+          const existingItem = cart.find(item => item.id === product.id);
+          
+          if (existingItem) {
+            existingItem.quantity += 1;
+          } else {
+            cart.push({
+              ...product,
+              quantity: 1
+            });
+          }
+          addedProducts.push(product.name);
         } else {
-          cart.push({
-            ...product,
-            quantity: 1
-          });
+          notFoundProducts.push(productId.toString());
         }
-        
-        userCarts.set(phone, cart);
-        
-        await sendMessage(phone, 
-          `✅ *${product.name}* agregado al carrito.\n\n` +
-          `Cantidad: ${existingItem ? existingItem.quantity : 1}\n` +
-          `Precio: $${product.price}\n\n` +
-          `Envía otro número para agregar más productos.\n` +
-          `*carrito* - Ver carrito\n` +
-          `*finalizar* - Completar pedido`
-        );
-        
-      } else {
-        await sendMessage(phone, "❌ Producto no encontrado. Envía *menu* para ver opciones disponibles.");
+      });
+      
+      userCarts.set(phone, cart);
+      
+      let responseMessage = "";
+      
+      if (addedProducts.length > 0) {
+        responseMessage += "✅ *Productos agregados:*\n";
+        addedProducts.forEach(name => {
+          responseMessage += `• ${name}\n`;
+        });
+        responseMessage += "\n";
       }
+      
+      if (notFoundProducts.length > 0) {
+        responseMessage += "❌ *Productos no encontrados:* " + notFoundProducts.join(", ") + "\n\n";
+      }
+      
+      // SIEMPRE mostrar carrito actualizado
+      responseMessage += formatCart(cart, true);
+      
+      await sendMessage(phone, responseMessage);
+      userStates.set(phone, STATES.BROWSING_PRODUCTS);
       
     } else {
       // Mensaje de bienvenida
       const welcomeMessage = 
         `¡Hola ${customerName}! 👋\n\n` +
         `Bienvenido a nuestro sistema de pedidos.\n\n` +
-        `Envía *menu* para ver nuestros productos disponibles.`;
+        `Enviá *menu* para ver nuestros productos disponibles.`;
       
       await sendMessage(phone, welcomeMessage);
       userStates.set(phone, STATES.MAIN_MENU);
@@ -300,7 +460,7 @@ app.post('/webhook', async (req, res) => {
     
   } catch (error) {
     console.error('Error processing message:', error);
-    await sendMessage(phone, "❌ Hubo un error. Por favor intenta nuevamente.");
+    await sendMessage(phone, "❌ Hubo un error. Por favor intentá nuevamente o enviá *menu* para empezar.");
   }
   
   res.sendStatus(200);
@@ -316,7 +476,7 @@ app.get('/api/orders', async (req, res) => {
   try {
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Pedidos!A:H',
+      range: 'Pedidos!A:K',
     });
     
     const rows = response.data.values;
@@ -325,7 +485,8 @@ app.get('/api/orders', async (req, res) => {
     }
     
     const [headers, ...data] = rows;
-    const orders = data.map(row => ({
+    const orders = data.map((row, index) => ({
+      rowIndex: index + 2,
       date: row[0],
       phone: row[1],
       customer: row[2],
@@ -333,7 +494,9 @@ app.get('/api/orders', async (req, res) => {
       total: parseFloat(row[4]),
       deliveryType: row[5],
       address: row[6],
-      status: row[7]
+      paymentMethod: row[7] || 'Efectivo',
+      paymentStatus: row[8] || 'Pendiente',
+      status: row[9] || 'NUEVO'
     }));
     
     res.json(orders);
@@ -343,9 +506,57 @@ app.get('/api/orders', async (req, res) => {
   }
 });
 
+// API para actualizar estado de pedido
+app.post('/api/orders/:phone/status', async (req, res) => {
+  try {
+    const { phone } = req.params;
+    const { status } = req.body;
+    
+    const success = await updateOrderStatus(`whatsapp:${phone}`, status);
+    
+    if (success) {
+      // Enviar notificación al cliente según el estado
+      let notificationMessage = "";
+      
+      switch (status) {
+        case 'PREPARANDO':
+          notificationMessage = "👨‍🍳 ¡Tu pedido se está preparando!\n\nTe avisamos cuando esté listo. ⏱️";
+          break;
+        case 'LISTO':
+          notificationMessage = "🎉 ¡Tu pedido está listo!\n\n" +
+            "🏪 Ya podés pasar a retirarlo.\n" +
+            "📍 Dirección: [Tu dirección del local]\n\n" +
+            "¡Te esperamos! 😊";
+          break;
+        case 'EN_DELIVERY':
+          notificationMessage = "🚚 ¡Tu pedido salió para delivery!\n\n" +
+            "📍 Llega a tu dirección en 15-20 minutos.\n" +
+            "¡Mantenete atento! 📱";
+          break;
+        case 'ENTREGADO':
+          notificationMessage = "✅ ¡Pedido entregado!\n\n" +
+            "🙏 Gracias por elegirnos.\n" +
+            "⭐ Tu opinión es muy importante para nosotros.";
+          break;
+      }
+      
+      if (notificationMessage) {
+        await notifyCustomer(`whatsapp:${phone}`, notificationMessage);
+      }
+      
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: 'Order not found' });
+    }
+  } catch (error) {
+    console.error('Error updating order status:', error);
+    res.status(500).json({ error: 'Error updating order status' });
+  }
+});
+
 // Iniciar servidor
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🤖 WhatsApp Order Bot running on port ${PORT}`);
+  console.log(`🤖 Sistema de Pedidos WhatsApp funcionando en puerto ${PORT}`);
   console.log(`📱 Panel: http://localhost:${PORT}`);
 });
