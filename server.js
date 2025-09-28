@@ -95,9 +95,10 @@ async function saveOrder(orderData) {
 }
 
 // Función para actualizar estado del pedido
-// Función para actualizar estado del pedido
 async function updateOrderStatus(phone, newStatus) {
   try {
+    console.log(`Buscando pedido para: "${phone}" -> estado: "${newStatus}"`);
+    
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Pedidos!A:K',
@@ -110,11 +111,14 @@ async function updateOrderStatus(phone, newStatus) {
     for (let i = rows.length - 1; i >= 1; i--) {
       const rowPhone = rows[i][1]; // Teléfono en la columna B
       
-      // Comparar con diferentes formatos posibles
-      if (rowPhone === phone || 
-          rowPhone === `whatsapp:+${phone}` || 
-          rowPhone === `whatsapp:${phone}` ||
-          rowPhone.replace('whatsapp:', '').replace('+', '') === phone.replace('+', '')) {
+      // Limpiar ambos números para comparación
+      const cleanRowPhone = rowPhone.replace('whatsapp:', '').replace('+', '');
+      const cleanSearchPhone = phone.replace('whatsapp:', '').replace('+', '');
+      
+      console.log(`Comparando: "${cleanRowPhone}" vs "${cleanSearchPhone}"`);
+      
+      if (cleanRowPhone === cleanSearchPhone) {
+        console.log(`ENCONTRADO! Actualizando fila ${i + 1}`);
         
         await sheets.spreadsheets.values.update({
           spreadsheetId: SPREADSHEET_ID,
@@ -122,9 +126,12 @@ async function updateOrderStatus(phone, newStatus) {
           valueInputOption: 'USER_ENTERED',
           resource: { values: [[newStatus]] }
         });
+        
         return true;
       }
     }
+    
+    console.log('No se encontró el pedido');
     return false;
   } catch (error) {
     console.error('Error updating order status:', error);
