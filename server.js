@@ -1,48 +1,4 @@
-if (message === '1') {
-        // Pago en efectivo
-        const finalAddress = userCarts.get(phone + '_address') || '';
-        await processOrder(phone, customerName, cart, deliveryType, finalAddress, 'efectivo');
-        
-        // Limpiar datos temporales
-        userCarts.delete(phone + '_delivery');
-        userCarts.delete(phone + '_address');
-        
-     } else if (message === '2') {
-  // Pago con MercadoPago
-  const finalAddress = userCarts.get(phone + '_address') || '';
-  const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-  const orderId = Date.now().toString();
-  
-  // Generar link de MercadoPago
-  const mpLink = generateMercadoPagoLink(total, orderId, customerName);
-  
-  let mpMessage = "💳 *PAGAR CON MERCADOPAGO*\n\n";
-  mpMessage += formatCart(cart, false) + "\n\n";
-  mpMessage += `💰 *Total a pagar: ${formatPrice(total)}*\n\n`;
-  mpMessage += "🔗 *OPCIÓN 1 - Link de pago:*\n";
-  mpMessage += `${mpLink}\n\n`;
-  mpMessage += "💰 *OPCIÓN 2 - Transferencia:*\n";
-  mpMessage += `📱 Alias: SABORES.BARRIO.MP\n`;
-  mpMessage += `💵 Importe: ${formatPrice(total)}\n`;
-  mpMessage += `📝 Concepto: Pedido #${orderId.slice(-6)}\n\n`;
-  mpMessage += "📸 *Después del pago, enviá una foto del comprobante.*\n\n";
-  mpMessage += "Una vez que recibamos el comprobante, procesaremos tu pedido.";
-  
-  await sendInteractiveMessage(phone, mpMessage);
-  
-  // Procesar pedido como pendiente de pago
-  await processOrder(phone, customerName, cart, deliveryType, finalAddress, 'mercadopago');
-  userStates.set(phone, STATES.PAYMENT_CONFIRMATION);
-  
-  // Limpiar datos temporales
-  userCarts.delete(phone + '_delivery');
-  userCarts.delete(phone + '_address');
-  
-} else {
-  await sendInteractiveMessage(phone, "❌ *Opción no válida*\n\nPor favor seleccioná:\n1️⃣ Efectivo\n2️⃣ MercadoPago");
-}
-
-        mprequire('dotenv').config();
+require('dotenv').config();
 const express = require('express');
 const { google } = require('googleapis');
 const twilio = require('twilio');
@@ -175,6 +131,14 @@ function formatPrice(price) {
     currency: 'ARS',
     minimumFractionDigits: 0
   }).format(price);
+}
+
+// Función para generar link de pago de MercadoPago
+function generateMercadoPagoLink(total, orderId, customerName) {
+  // En producción, aquí usarías la API real de MercadoPago
+  // Por ahora simulamos un link con los datos del pedido
+  const encodedData = encodeURIComponent(`${customerName}-${orderId}-${total}`);
+  return `https://mpago.la/2Qx8y9z?amount=${total}&concept=Pedido-${orderId.slice(-6)}`;
 }
 
 // Función para formatear el menú con pseudo-botones visuales
@@ -339,7 +303,7 @@ async function processOrder(phone, customerName, cart, deliveryType, address = '
   
   if (paymentMethod === 'mercadopago') {
     confirmMessage += `💳 *Para completar el pago:*\n`;
-    confirmMessage += `💰 Alias: TUCOMIDA.MP\n`;
+    confirmMessage += `💰 Alias: SABORES.BARRIO.MP\n`;
     confirmMessage += `💵 Importe: ${formatPrice(total)}\n`;
     confirmMessage += `📝 Concepto: Pedido #${orderId.slice(-6)}\n\n`;
     confirmMessage += `📸 *Después del pago, enviá una foto del comprobante.*\n\n`;
