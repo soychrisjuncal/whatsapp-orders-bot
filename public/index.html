@@ -1,6 +1,4 @@
-<!DOCTYPE 
-html
->
+<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -628,7 +626,7 @@ html
         }
 
         function getActionButtons(order) {
-            const phone = order.phone.replace('whatsapp:', '');
+            const phone = order.phone.replace('whatsapp:', '').replace('+', '');
             let buttons = [];
 
             switch (order.status) {
@@ -682,7 +680,11 @@ html
 
         async function updateOrderStatus(phone, newStatus) {
             try {
-                const response = await fetch(`/api/orders/${phone}/status`, {
+                // Limpiar el número de teléfono para la URL
+                const cleanPhone = phone.replace('whatsapp:', '').replace('+', '');
+                console.log('Actualizando estado para:', cleanPhone, 'a:', newStatus);
+                
+                const response = await fetch(`/api/orders/${cleanPhone}/status`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -694,6 +696,8 @@ html
                     await loadOrders();
                     showNotification(`Estado actualizado: ${getStatusText(newStatus)}`, 'success');
                 } else {
+                    const errorData = await response.text();
+                    console.error('Error response:', errorData);
                     showNotification('Error al actualizar el estado del pedido', 'error');
                 }
             } catch (error) {
@@ -705,7 +709,11 @@ html
         async function cancelOrder(phone) {
             if (confirm('¿Estás seguro de que querés cancelar este pedido?')) {
                 try {
-                    const response = await fetch(`/api/orders/${phone}/status`, {
+                    // Limpiar el número de teléfono para la URL
+                    const cleanPhone = phone.replace('whatsapp:', '').replace('+', '');
+                    console.log('Cancelando pedido para:', cleanPhone);
+                    
+                    const response = await fetch(`/api/orders/${cleanPhone}/status`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -717,6 +725,8 @@ html
                         await loadOrders();
                         showNotification('Pedido cancelado correctamente', 'success');
                     } else {
+                        const errorData = await response.text();
+                        console.error('Error response:', errorData);
                         showNotification('Error al cancelar el pedido', 'error');
                     }
                 } catch (error) {
