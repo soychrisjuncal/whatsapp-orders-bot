@@ -1,4 +1,48 @@
-require('dotenv').config();
+if (message === '1') {
+        // Pago en efectivo
+        const finalAddress = userCarts.get(phone + '_address') || '';
+        await processOrder(phone, customerName, cart, deliveryType, finalAddress, 'efectivo');
+        
+        // Limpiar datos temporales
+        userCarts.delete(phone + '_delivery');
+        userCarts.delete(phone + '_address');
+        
+     } else if (message === '2') {
+  // Pago con MercadoPago
+  const finalAddress = userCarts.get(phone + '_address') || '';
+  const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const orderId = Date.now().toString();
+  
+  // Generar link de MercadoPago
+  const mpLink = generateMercadoPagoLink(total, orderId, customerName);
+  
+  let mpMessage = "💳 *PAGAR CON MERCADOPAGO*\n\n";
+  mpMessage += formatCart(cart, false) + "\n\n";
+  mpMessage += `💰 *Total a pagar: ${formatPrice(total)}*\n\n`;
+  mpMessage += "🔗 *OPCIÓN 1 - Link de pago:*\n";
+  mpMessage += `${mpLink}\n\n`;
+  mpMessage += "💰 *OPCIÓN 2 - Transferencia:*\n";
+  mpMessage += `📱 Alias: SABORES.BARRIO.MP\n`;
+  mpMessage += `💵 Importe: ${formatPrice(total)}\n`;
+  mpMessage += `📝 Concepto: Pedido #${orderId.slice(-6)}\n\n`;
+  mpMessage += "📸 *Después del pago, enviá una foto del comprobante.*\n\n";
+  mpMessage += "Una vez que recibamos el comprobante, procesaremos tu pedido.";
+  
+  await sendInteractiveMessage(phone, mpMessage);
+  
+  // Procesar pedido como pendiente de pago
+  await processOrder(phone, customerName, cart, deliveryType, finalAddress, 'mercadopago');
+  userStates.set(phone, STATES.PAYMENT_CONFIRMATION);
+  
+  // Limpiar datos temporales
+  userCarts.delete(phone + '_delivery');
+  userCarts.delete(phone + '_address');
+  
+} else {
+  await sendInteractiveMessage(phone, "❌ *Opción no válida*\n\nPor favor seleccioná:\n1️⃣ Efectivo\n2️⃣ MercadoPago");
+}
+
+        mprequire('dotenv').config();
 const express = require('express');
 const { google } = require('googleapis');
 const twilio = require('twilio');
@@ -363,6 +407,23 @@ app.post('/webhook', async (req, res) => {
       await sendInteractiveMessage(phone, "🗑️ Carrito vaciado.\n\n" + formatCart([], true));
       userStates.set(phone, STATES.MAIN_MENU);
       
+    } else if (message === 'cancelar') {
+      // Usuario quiere cancelar su pedido actual
+      if (cart.length > 0) {
+        userCarts.set(phone, []);
+        userStates.set(phone, STATES.MAIN_MENU);
+        await sendInteractiveMessage(phone, 
+          "❌ *Pedido cancelado*\n\n" +
+          "Tu carrito ha sido vaciado.\n" +
+          "Enviá *menu* cuando quieras hacer un nuevo pedido."
+        );
+      } else {
+        await sendInteractiveMessage(phone, 
+          "No tenés ningún pedido activo para cancelar.\n" +
+          "Enviá *menu* para empezar un nuevo pedido."
+        );
+      }
+      
     } else if (message === 'finalizar') {
       if (cart.length === 0) {
         await sendInteractiveMessage(phone, "Tu carrito está vacío. Enviá *menu* para agregar productos.");
@@ -450,8 +511,28 @@ app.post('/webhook', async (req, res) => {
       } else if (message === '2') {
         // Pago con MercadoPago
         const finalAddress = userCarts.get(phone + '_address') || '';
-        const orderId = await processOrder(phone, customerName, cart, deliveryType, finalAddress, 'mercadopago');
+        const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+        const orderId = Date.now().toString();
         
+        // Generar link de MercadoPago
+        const mpLink = generateMercadoPagoLink(total, orderId, customerName);
+        
+        let mpMessage = "💳 *PAGAR CON MERCADOPAGO*\n\n";
+        mpMessage += formatCart(cart, false) + "\n\n";
+        mpMessage += `💰 *Total a pagar: ${formatPrice(total)}*\n\n`;
+        mpMessage += "🔗 *OPCIÓN 1 - Link de pago:*\n";
+        mpMessage += `${mpLink}\n\n`;
+        mpMessage += "💰 *OPCIÓN 2 - Transferencia:*\n";
+        mpMessage += `📱 Alias: SABORES.BARRIO.MP\n`;
+        mpMessage += `💵 Importe: ${formatPrice(total)}\n`;
+        mpMessage += `📝 Concepto: Pedido #${orderId.slice(-6)}\n\n`;
+        mpMessage += "📸 *Después del pago, enviá una foto del comprobante.*\n\n";
+        mpMessage += "Una vez que recibamos el comprobante, procesaremos tu pedido.";
+        
+        await sendInteractiveMessage(phone, mpMessage);
+        
+        // Procesar pedido como pendiente de pago
+        await processOrder(phone, customerName, cart, deliveryType, finalAddress, 'mercadopago');
         userStates.set(phone, STATES.PAYMENT_CONFIRMATION);
         
         // Limpiar datos temporales
@@ -459,7 +540,7 @@ app.post('/webhook', async (req, res) => {
         userCarts.delete(phone + '_address');
         
       } else {
-        await sendMessage(phone, "Por favor seleccioná una opción válida:\n1️⃣ Efectivo\n2️⃣ MercadoPago");
+        await sendInteractiveMessage(phone, "❌ *Opción no válida*\n\nPor favor seleccioná:\n1️⃣ Efectivo\n2️⃣ MercadoPago");
       }
       
     } else if (/^[\d,\s]+$/.test(message)) {
@@ -602,6 +683,17 @@ app.post('/api/orders/:phone/status', async (req, res) => {
           notificationMessage = "✅ ¡Pedido entregado!\n\n" +
             "🙏 Gracias por elegirnos.\n" +
             "⭐ Tu opinión es muy importante para nosotros.";
+          break;
+        case 'FINALIZADO':
+          notificationMessage = "🏁 *Pedido finalizado*\n\n" +
+            "✅ Tu pedido ha sido completado exitosamente.\n" +
+            "¡Esperamos verte pronto! 😊";
+          break;
+        case 'CANCELADO':
+          notificationMessage = "❌ *Pedido cancelado*\n\n" +
+            "😔 Tu pedido ha sido cancelado.\n" +
+            "Si tenés alguna consulta, no dudes en contactarnos.\n\n" +
+            "¡Esperamos poder atenderte pronto! 🙏";
           break;
       }
       
