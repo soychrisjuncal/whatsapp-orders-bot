@@ -597,6 +597,7 @@ app.get('/', (req, res) => {
 });
 
 // API para obtener pedidos
+// API para obtener pedidos
 app.get('/api/orders', async (req, res) => {
   try {
     const response = await sheets.spreadsheets.values.get({
@@ -619,9 +620,9 @@ app.get('/api/orders', async (req, res) => {
       total: parseFloat(row[4]),
       deliveryType: row[5],
       address: row[6],
-      paymentMethod: row[7] || 'Efectivo',
-      paymentStatus: row[8] || 'Pendiente',
-      status: row[9] || 'NUEVO'
+      status: row[7] || 'NUEVO',        // CAMBIAR: Leer desde columna H (índice 7)
+      paymentMethod: row[8] || 'Efectivo',  // CAMBIAR: Mover a columna I (índice 8)
+      paymentStatus: row[9] || 'Pendiente'  // CAMBIAR: Mover a columna J (índice 9)
     }));
     
     res.json(orders);
