@@ -468,19 +468,28 @@
 
         async function loadOrders() {
             try {
+                console.log('🔄 Cargando pedidos...');
                 document.getElementById('ordersLoading').style.display = 'block';
                 document.getElementById('ordersGrid').style.display = 'none';
 
                 const response = await fetch('/api/orders');
                 orders = await response.json();
 
+                // DEBUG: Ver qué estados están llegando
+                console.log('📋 DEBUG: Todos los pedidos recibidos:', orders);
+                orders.forEach((order, index) => {
+                    console.log(`📦 Pedido ${index + 1}: Cliente="${order.customer}", Estado="${order.status}", Teléfono="${order.phone}"`);
+                });
+
                 updateStats();
                 renderOrders();
 
                 document.getElementById('ordersLoading').style.display = 'none';
                 document.getElementById('ordersGrid').style.display = 'grid';
+                
+                console.log('✅ Pedidos cargados correctamente');
             } catch (error) {
-                console.error('Error loading orders:', error);
+                console.error('❌ Error loading orders:', error);
                 document.getElementById('ordersLoading').innerHTML = 
                     '<p style="color: #e74c3c; font-weight: 600;">Error al cargar pedidos</p>';
             }
@@ -517,14 +526,6 @@
             const ordersGrid = document.getElementById('ordersGrid');
             
             if (orders.length === 0) {
-
-// DEBUG: Ver qué estados están llegando
-console.log('DEBUG: Todos los pedidos:', orders);
-orders.forEach((order, index) => {
-    console.log(`Pedido ${index}: Estado = "${order.status}"`);
-});
-
-
                 ordersGrid.innerHTML = `
                     <div class="empty-state">
                         <h3>📱 No hay pedidos aún</h3>
@@ -539,6 +540,9 @@ orders.forEach((order, index) => {
             const activeOrders = orders.filter(order => 
                 !['FINALIZADO', 'CANCELADO'].includes(order.status)
             );
+
+            console.log(`🔍 Filtrando pedidos: Total=${orders.length}, Activos=${activeOrders.length}`);
+            console.log('🔍 Estados encontrados:', orders.map(o => o.status));
 
             if (activeOrders.length === 0) {
                 ordersGrid.innerHTML = `
@@ -688,9 +692,8 @@ orders.forEach((order, index) => {
 
         async function updateOrderStatus(phone, newStatus) {
             try {
-                // Limpiar el número de teléfono para la URL
                 const cleanPhone = phone.replace('whatsapp:', '').replace('+', '');
-                console.log('Actualizando estado para:', cleanPhone, 'a:', newStatus);
+                console.log(`🔄 Actualizando estado: ${cleanPhone} -> ${newStatus}`);
                 
                 const response = await fetch(`/api/orders/${cleanPhone}/status`, {
                     method: 'POST',
@@ -701,15 +704,16 @@ orders.forEach((order, index) => {
                 });
 
                 if (response.ok) {
-                    await loadOrders();
+                    console.log(`✅ Estado actualizado correctamente`);
+                    await loadOrders(); // Recargar pedidos
                     showNotification(`Estado actualizado: ${getStatusText(newStatus)}`, 'success');
                 } else {
                     const errorData = await response.text();
-                    console.error('Error response:', errorData);
+                    console.error('❌ Error response:', errorData);
                     showNotification('Error al actualizar el estado del pedido', 'error');
                 }
             } catch (error) {
-                console.error('Error updating order status:', error);
+                console.error('❌ Error updating order status:', error);
                 showNotification('Error al actualizar el estado del pedido', 'error');
             }
         }
@@ -717,9 +721,8 @@ orders.forEach((order, index) => {
         async function cancelOrder(phone) {
             if (confirm('¿Estás seguro de que querés cancelar este pedido?')) {
                 try {
-                    // Limpiar el número de teléfono para la URL
                     const cleanPhone = phone.replace('whatsapp:', '').replace('+', '');
-                    console.log('Cancelando pedido para:', cleanPhone);
+                    console.log(`🗑️ Cancelando pedido: ${cleanPhone}`);
                     
                     const response = await fetch(`/api/orders/${cleanPhone}/status`, {
                         method: 'POST',
@@ -730,15 +733,16 @@ orders.forEach((order, index) => {
                     });
 
                     if (response.ok) {
-                        await loadOrders();
+                        console.log(`✅ Pedido cancelado correctamente`);
+                        await loadOrders(); // Recargar pedidos
                         showNotification('Pedido cancelado correctamente', 'success');
                     } else {
                         const errorData = await response.text();
-                        console.error('Error response:', errorData);
+                        console.error('❌ Error response:', errorData);
                         showNotification('Error al cancelar el pedido', 'error');
                     }
                 } catch (error) {
-                    console.error('Error canceling order:', error);
+                    console.error('❌ Error canceling order:', error);
                     showNotification('Error al cancelar el pedido', 'error');
                 }
             }
