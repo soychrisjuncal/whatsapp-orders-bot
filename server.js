@@ -95,6 +95,7 @@ async function saveOrder(orderData) {
 }
 
 // Función para actualizar estado del pedido
+// Función para actualizar estado del pedido
 async function updateOrderStatus(phone, newStatus) {
   try {
     const response = await sheets.spreadsheets.values.get({
@@ -107,10 +108,17 @@ async function updateOrderStatus(phone, newStatus) {
     
     // Buscar el pedido más reciente del usuario
     for (let i = rows.length - 1; i >= 1; i--) {
-      if (rows[i][1] === phone) {
+      const rowPhone = rows[i][1]; // Teléfono en la columna B
+      
+      // Comparar con diferentes formatos posibles
+      if (rowPhone === phone || 
+          rowPhone === `whatsapp:+${phone}` || 
+          rowPhone === `whatsapp:${phone}` ||
+          rowPhone.replace('whatsapp:', '').replace('+', '') === phone.replace('+', '')) {
+        
         await sheets.spreadsheets.values.update({
           spreadsheetId: SPREADSHEET_ID,
-          range: `Pedidos!K${i + 1}`,
+          range: `Pedidos!H${i + 1}`, // Actualizar columna H (Estado)
           valueInputOption: 'USER_ENTERED',
           resource: { values: [[newStatus]] }
         });
