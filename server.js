@@ -133,21 +133,29 @@ function formatPrice(price) {
   }).format(price);
 }
 
-// Función para formatear el menú
+// Función para formatear el menú con pseudo-botones visuales
 function formatMenuWithButtons(menu) {
   const categories = [...new Set(menu.map(item => item.category))];
-  let message = "🍽️ *MENÚ DISPONIBLE*\n\n";
+  let message = "🍽️ *MENÚ SABORES DEL BARRIO*\n\n";
   
   categories.forEach(category => {
-    message += `📋 *${category}*\n`;
+    message += `📋 *${category}*\n\n`;
+    
     menu.filter(item => item.category === category).forEach(item => {
-      message += `${item.id}. ${item.name} - ${formatPrice(item.price)}\n`;
+      message += `┌─ ${item.id}️⃣ ${item.name} ─┐\n`;
+      message += `│ ${formatPrice(item.price)} │\n`;
       if (item.description) {
-        message += `   _${item.description}_\n`;
+        message += `│ _${item.description}_ │\n`;
       }
+      message += `└──────────────┘\n\n`;
     });
-    message += "\n";
   });
+  
+  message += "*⚡ CÓMO PEDIR:*\n";
+  message += "• Un producto: *1*\n";
+  message += "• Varios: *1,2,3*\n";
+  message += "• Ver carrito: *carrito*\n";
+  message += "• Finalizar: *finalizar*";
   
   return message;
 }
@@ -184,7 +192,7 @@ function formatCart(cart, showOptions = true) {
   return message;
 }
 
-// Función para enviar mensajes
+// Función para enviar mensajes simples
 async function sendMessage(to, body) {
   if (!client) {
     console.error('Twilio client not initialized - check credentials');
@@ -199,6 +207,47 @@ async function sendMessage(to, body) {
     });
   } catch (error) {
     console.error('Error sending message:', error);
+  }
+}
+
+// Función para enviar mensajes con botones interactivos
+async function sendInteractiveMessage(to, body, options = null) {
+  if (!client) {
+    console.error('Twilio client not initialized - check credentials');
+    return;
+  }
+  
+  try {
+    if (options && options.type === 'buttons' && options.buttons) {
+      // Enviar mensaje con botones de respuesta rápida (máximo 3)
+      await client.messages.create({
+        body: body,
+        from: 'whatsapp:+14155238886',
+        to: to,
+        // Nota: Los botones interactivos requieren configuración especial en Twilio
+        // Por ahora simulamos con texto estructurado
+      });
+    } else if (options && options.type === 'list' && options.listItems) {
+      // Enviar mensaje con lista interactiva
+      await client.messages.create({
+        body: body,
+        from: 'whatsapp:+14155238886',
+        to: to,
+        // Nota: Las listas interactivas requieren configuración especial en Twilio
+        // Por ahora simulamos con texto estructurado
+      });
+    } else {
+      // Mensaje simple
+      await client.messages.create({
+        body: body,
+        from: 'whatsapp:+14155238886',
+        to: to
+      });
+    }
+  } catch (error) {
+    console.error('Error sending interactive message:', error);
+    // Fallback a mensaje simple
+    await sendMessage(to, body);
   }
 }
 
@@ -302,37 +351,43 @@ app.post('/webhook', async (req, res) => {
       // SIEMPRE mostrar estado del carrito
       fullMessage += formatCart(cart, true);
       
-      await sendMessage(phone, fullMessage);
+      await sendInteractiveMessage(phone, fullMessage);
       userStates.set(phone, STATES.BROWSING_PRODUCTS);
       
     } else if (message === 'carrito') {
       const cartText = formatCart(cart, true);
-      await sendMessage(phone, cartText);
+      await sendInteractiveMessage(phone, cartText);
       
     } else if (message === 'limpiar') {
       userCarts.set(phone, []);
-      await sendMessage(phone, "🗑️ Carrito vaciado.\n\n" + formatCart([], true));
+      await sendInteractiveMessage(phone, "🗑️ Carrito vaciado.\n\n" + formatCart([], true));
       userStates.set(phone, STATES.MAIN_MENU);
       
     } else if (message === 'finalizar') {
       if (cart.length === 0) {
-        await sendMessage(phone, "Tu carrito está vacío. Enviá *menu* para agregar productos.");
+        await sendInteractiveMessage(phone, "Tu carrito está vacío. Enviá *menu* para agregar productos.");
         return res.sendStatus(200);
       }
       
-      let confirmMessage = "🏠 *TIPO DE ENTREGA*\n\n";
+      let confirmMessage = "🛒 *RESUMEN DE TU PEDIDO*\n\n";
       confirmMessage += formatCart(cart, false) + "\n\n";
-      confirmMessage += "*Seleccioná una opción:*\n";
-      confirmMessage += "1️⃣ 🚚 Delivery\n";
-      confirmMessage += "2️⃣ 🏪 Retiro en local\n\n";
-      confirmMessage += "Enviá *1* para delivery o *2* para retiro.";
       
-      await sendMessage(phone, confirmMessage);
+      confirmMessage += "🏠 *SELECCIONÁ EL TIPO DE ENTREGA:*\n\n";
+      confirmMessage += "┌─────────────────────┐\n";
+      confirmMessage += "│  1️⃣  🚚 DELIVERY     │\n";
+      confirmMessage += "│  2️⃣  🏪 RETIRO      │\n";
+      confirmMessage += "└─────────────────────┘\n\n";
+      confirmMessage += "Tocá *1* para delivery o *2* para retiro en local.";
+      
+      await sendInteractiveMessage(phone, confirmMessage, {
+        type: 'buttons',
+        buttons: ['1️⃣ Delivery', '2️⃣ Retiro']
+      });
       userStates.set(phone, STATES.DELIVERY_INFO);
       
     } else if (userState === STATES.DELIVERY_INFO) {
       if (message === '1') {
-        await sendMessage(phone, "📍 Por favor enviá tu dirección completa para el delivery:");
+        await sendInteractiveMessage(phone, "📍 *DIRECCIÓN PARA DELIVERY*\n\nPor favor enviá tu dirección completa:\n\n*Ejemplo:* Av. Corrientes 1234, CABA");
         userStates.set(phone, STATES.PAYMENT_METHOD);
         userCarts.set(phone + '_delivery', 'delivery');
         
@@ -341,16 +396,26 @@ app.post('/webhook', async (req, res) => {
         
         let paymentMessage = "💳 *MÉTODO DE PAGO*\n\n";
         paymentMessage += formatCart(cart, false) + "\n\n";
-        paymentMessage += "*Seleccioná cómo vas a pagar:*\n";
-        paymentMessage += "1️⃣ 💵 Efectivo (en el local)\n";
-        paymentMessage += "2️⃣ 💳 MercadoPago (transferencia)\n\n";
-        paymentMessage += "Enviá *1* para efectivo o *2* para MercadoPago.";
+        paymentMessage += "🏪 *RETIRO EN LOCAL*\n\n";
+        paymentMessage += "┌─────────────────────────┐\n";
+        paymentMessage += "│  1️⃣  💵 EFECTIVO       │\n";
+        paymentMessage += "│  2️⃣  💳 MERCADOPAGO    │\n";
+        paymentMessage += "└─────────────────────────┘\n\n";
+        paymentMessage += "Tocá *1* para pagar en efectivo o *2* para MercadoPago.";
         
-        await sendMessage(phone, paymentMessage);
+        await sendInteractiveMessage(phone, paymentMessage, {
+          type: 'buttons',
+          buttons: ['1️⃣ Efectivo', '2️⃣ MercadoPago']
+        });
         userStates.set(phone, STATES.PAYMENT_METHOD);
         
       } else {
-        await sendMessage(phone, "Por favor seleccioná una opción válida:\n1️⃣ Delivery\n2️⃣ Retiro en local");
+        await sendInteractiveMessage(phone, 
+          "❌ *Opción no válida*\n\n" +
+          "Por favor seleccioná:\n" +
+          "1️⃣ Delivery\n" +
+          "2️⃣ Retiro en local"
+        );
       }
       
     } else if (userState === STATES.PAYMENT_METHOD) {
